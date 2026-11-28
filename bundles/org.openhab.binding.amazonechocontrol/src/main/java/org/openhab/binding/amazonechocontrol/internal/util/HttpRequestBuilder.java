@@ -123,7 +123,6 @@ public class HttpRequestBuilder {
         request.timeout(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         request.headers(headers -> {
             headers.put(ACCEPT_LANGUAGE, customHeader(params, ACCEPT_LANGUAGE).orElse("en-US"));
-            headers.put("DNT", "1");
             headers.put("Upgrade-Insecure-Requests", "1");
         });
         request.agent(customHeader(params, USER_AGENT).orElse(userAgent));

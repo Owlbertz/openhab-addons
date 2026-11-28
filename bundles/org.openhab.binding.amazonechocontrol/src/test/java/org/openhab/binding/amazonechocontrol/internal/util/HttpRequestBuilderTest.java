@@ -240,6 +240,16 @@ public class HttpRequestBuilderTest {
         assertThat(headersOf(request).get(HttpHeader.ACCEPT_LANGUAGE), is("en-US"));
     }
 
+    @Test
+    @SuppressWarnings("null")
+    public void testARequestIsSentWithoutADoNotTrackHeader() {
+        Request request = mock(Request.class, RETURNS_SELF);
+
+        requestBuilderFor(request).post("https://eu-api-alexa.amazon.com/api/phoenix/state").send();
+
+        assertThat(headersOf(request).get("DNT"), is(nullValue()));
+    }
+
     /**
      * Replays every header block the builder passed to {@link Request#headers} so the resulting fields can be
      * asserted on. Jetty 12 has no {@code Request.header(String, String)} left to verify against.
