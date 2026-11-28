@@ -10,7 +10,9 @@ The API client is based on [myPyllant](https://github.com/signalkraft/myPyllant)
 - ambiSENSE rooms, ventilation units and EEBUS are not supported.
   Time programs can be read and written as JSON with the actions.
 - Vaillant limits the number of requests per account (call volume quota).
-  When it is exceeded, the API answers with `Out of call volume quota` for up to an hour and the binding pauses all requests until then.
+  When it is exceeded, the API answers with `Out of call volume quota` and the time until it is replenished.
+  The binding pauses all requests until then, but tries again after an hour at the latest, as requests can work again long before the reported time.
+  It logs Vaillant's answer when the quota is exceeded, and how long it lasted once requests work again.
   All clients of an account share the quota, e.g. the myVAILLANT app and other integrations.
 
 ## Supported Things

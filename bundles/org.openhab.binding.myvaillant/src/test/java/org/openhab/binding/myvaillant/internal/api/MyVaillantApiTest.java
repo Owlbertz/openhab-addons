@@ -51,5 +51,24 @@ class MyVaillantApiTest {
         assertEquals(Duration.ofSeconds(120), MyVaillantApi.getQuotaPause("Quota exceeded", "120"));
         assertEquals(Duration.ofHours(1),
                 MyVaillantApi.getQuotaPause("Quota exceeded", "Wed, 21 Oct 2026 07:28:00 GMT"));
+        // Reported as is, the pause is capped at MAX_QUOTA_PAUSE where the quota is detected
+        assertEquals(Duration.ofHours(17).plusMinutes(15).plusSeconds(10),
+                MyVaillantApi.getQuotaPause("Out of call volume quota. Quota will be replenished in 17:15:00.", null));
+        assertEquals(Duration.ofHours(1), MyVaillantApi.MAX_QUOTA_PAUSE);
+    }
+
+    @Test
+    void formatsDurationsBeyondOneDay() {
+        assertEquals("0:29:22", MyVaillantApi.formatDuration(Duration.ofMinutes(29).plusSeconds(22)));
+        assertEquals("41:15:10", MyVaillantApi.formatDuration(Duration.ofHours(41).plusMinutes(15).plusSeconds(10)));
+    }
+
+    @Test
+    void abbreviatesLoggedResponses() {
+        assertEquals("{ \"message\": \"Out of call volume quota.\" }",
+                MyVaillantApi.abbreviate("{\n  \"message\":   \"Out of call volume quota.\"\n}\n"));
+        String abbreviated = MyVaillantApi.abbreviate("x".repeat(500));
+        assertEquals(203, abbreviated.length());
+        assertTrue(abbreviated.endsWith("..."));
     }
 }

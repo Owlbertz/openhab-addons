@@ -87,6 +87,14 @@ public class MyVaillantApi {
     private static final Duration TOKEN_REFRESH_MARGIN = Duration.ofMinutes(3);
     private static final Duration HOMES_CACHE_DURATION = Duration.ofHours(6);
     private static final Duration DEFAULT_QUOTA_PAUSE = Duration.ofHours(1);
+    /**
+     * Longest pause after the quota was exceeded. The replenish time Vaillant reports is not reliable (requests worked
+     * again many hours before it), a try while the quota is still exceeded costs a single request.
+     */
+    static final Duration MAX_QUOTA_PAUSE = Duration.ofHours(1);
+    private static final int MAX_LOGGED_RESPONSE_LENGTH = 200;
+    private static final DateTimeFormatter LOG_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss",
+            Locale.ROOT);
     private static final Pattern QUOTA_DURATION = Pattern
             .compile("Quota will be replenished in (\\d{2}):(\\d{2}):(\\d{2})");
     private static final Pattern CODE_PARAMETER = Pattern.compile("[?&#]code=([^&#]+)");
@@ -109,6 +117,8 @@ public class MyVaillantApi {
     private @Nullable Token token;
 
     private volatile @Nullable Instant blockedUntil;
+    /** When the quota was exceeded first, {@code null} once a request worked again */
+    private volatile @Nullable Instant quotaExceededSince;
     private final Map<String, String> controlIdentifiers = new ConcurrentHashMap<>();
     private final Map<String, ZoneId> timeZones = new ConcurrentHashMap<>();
     private volatile @Nullable JsonArray homes;
@@ -654,13 +664,29 @@ public class MyVaillantApi {
             // 00:29:12."
             String lowerContent = content.toLowerCase(Locale.ROOT);
             if (lowerContent.contains("quota exceeded") || lowerContent.contains("out of call volume quota")) {
-                Instant blocked = Instant.now().plus(getQuotaPause(content, response.getHeaders().get("Retry-After")));
+                Duration reported = getQuotaPause(content, response.getHeaders().get("Retry-After"));
+                Duration pause = reported.compareTo(MAX_QUOTA_PAUSE) > 0 ? MAX_QUOTA_PAUSE : reported;
+                Instant now = Instant.now();
+                Instant blocked = now.plus(pause);
                 blockedUntil = blocked;
+                if (quotaExceededSince == null) {
+                    quotaExceededSince = now;
+                }
+                logger.info(
+                        "myVAILLANT call volume quota exceeded ({} {} after {} requests today), Vaillant reports it replenished in {}, next try at {}: {}",
+                        method.asString(), path, getRequestCount(), formatDuration(reported), formatTime(blocked),
+                        abbreviate(content));
                 throw new MyVaillantQuotaExceededException(blocked);
             }
         }
         if (status < 200 || status >= 300) {
             throw new MyVaillantApiException(method.asString(), path, status, content);
+        }
+        Instant exceededSince = quotaExceededSince;
+        if (exceededSince != null) {
+            quotaExceededSince = null;
+            logger.info("myVAILLANT requests work again, the call volume quota was exceeded since {} ({})",
+                    formatTime(exceededSince), formatDuration(Duration.between(exceededSince, Instant.now())));
         }
         if (content.isBlank()) {
             return JsonNull.INSTANCE;
@@ -721,6 +747,29 @@ public class MyVaillantApi {
             throw new MyVaillantException(
                     "Request to " + request.getHost() + request.getPath() + " failed: " + e.getMessage(), e);
         }
+    }
+
+    private int getRequestCount() {
+        synchronized (requestCountLock) {
+            return requestCount;
+        }
+    }
+
+    private String formatTime(Instant instant) {
+        return LOG_DATE_TIME.format(instant.atZone(timeZoneProvider.getTimeZone()));
+    }
+
+    /** As {@code h:mm:ss}, the hours can exceed 24 */
+    static String formatDuration(Duration duration) {
+        return String.format(Locale.ROOT, "%d:%02d:%02d", duration.toHours(), duration.toMinutesPart(),
+                duration.toSecondsPart());
+    }
+
+    /** The response on one line and shortened, it can be an HTML page */
+    static String abbreviate(String content) {
+        String line = content.replaceAll("\\s+", " ").trim();
+        return line.length() > MAX_LOGGED_RESPONSE_LENGTH ? line.substring(0, MAX_LOGGED_RESPONSE_LENGTH) + "..."
+                : line;
     }
 
     private void countRequest() {

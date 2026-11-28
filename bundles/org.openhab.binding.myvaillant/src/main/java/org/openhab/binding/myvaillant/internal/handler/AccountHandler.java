@@ -65,7 +65,8 @@ public class AccountHandler extends BaseBridgeHandler {
     private static final Set<String> BRANDS_WITH_COUNTRY = Set.of("vaillant", "sdbg");
     /** The country becomes part of the identity provider's URL, e.g. {@code germany} or {@code north-macedonia} */
     private static final Pattern COUNTRY = Pattern.compile("[a-z]+(-[a-z]+)*");
-    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm");
+    /** With the date, the next try can be on the next day */
+    private static final DateTimeFormatter NEXT_TRY = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
 
     private final Logger logger = LoggerFactory.getLogger(AccountHandler.class);
     private final HttpClientFactory httpClientFactory;
@@ -240,7 +241,7 @@ public class AccountHandler extends BaseBridgeHandler {
             Instant until = quotaException.getBlockedUntil();
             logger.debug("Call volume quota exceeded, pausing requests until {}", until);
             updateStatus(ThingStatusDetail.OFFLINE.COMMUNICATION_ERROR, "@text/offline.comm-error.quota-exceeded [\""
-                    + TIME.format(until.atZone(timeZoneProvider.getTimeZone())) + "\"]");
+                    + NEXT_TRY.format(until.atZone(timeZoneProvider.getTimeZone())) + "\"]");
             scheduleConnect(Duration.between(Instant.now(), until));
             return true;
         }
