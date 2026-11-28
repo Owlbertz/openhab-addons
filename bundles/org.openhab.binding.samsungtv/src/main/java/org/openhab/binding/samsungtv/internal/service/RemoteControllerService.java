@@ -745,6 +745,13 @@ public class RemoteControllerService implements SamsungTvService {
         }
     }
 
+    /**
+     * Clears the art mode when the TV went to standby, artMode ON then wakes the TV
+     */
+    public void clearArtMode() {
+        artMode = false;
+    }
+
     public boolean getArtMode() {
         return artMode;
     }

@@ -775,6 +775,8 @@ public class SamsungTvHandler extends BaseThingHandler implements RegistryListen
         }
         stopServices();
         if (reportedStandby) {
+            findServiceInstance(RemoteControllerService.SERVICE_NAME)
+                    .ifPresent(s -> ((RemoteControllerService) s).clearArtMode());
             clearStandbyState();
         }
         setUnavailable();
@@ -832,6 +834,7 @@ public class SamsungTvHandler extends BaseThingHandler implements RegistryListen
                 // cleared so artMode does not stay ON indefinitely. This happens e.g. on 2021 Frame TVs that do not
                 // send go_to_standby, so standby is only detected when the MediaRenderer disappears.
                 clearStandbyState();
+                clearArtModeIfStandby();
             }
             if (getThing().getStatus() != ThingStatus.ONLINE) {
                 updateStatus(ThingStatus.ONLINE);
@@ -840,6 +843,7 @@ public class SamsungTvHandler extends BaseThingHandler implements RegistryListen
         } else if (getThing().getStatus() != ThingStatus.OFFLINE) {
             stopPolling();
             clearStandbyState();
+            clearArtModeIfStandby();
             updateStatus(ThingStatus.OFFLINE);
             logger.debug("{}: TV is {}", host, getThing().getStatus());
         }
@@ -857,6 +861,42 @@ public class SamsungTvHandler extends BaseThingHandler implements RegistryListen
         } else {
             setUnavailable();
         }
+    }
+
+    /**
+     * The RemoteControllerService of a 2022 Frame TV is kept in standby, and newer firmware (art API 6000) does not
+     * send go_to_standby, so its art mode would stay on and an artMode ON command would not wake the TV. UPnP can also
+     * lose a TV that stays in art mode, where power is OFF too, and clearing art mode then would make artMode ON send
+     * KEY_POWER and leave art mode. So art mode is only cleared once the TV confirms standby, which is checked off the
+     * UPnP and handler threads.
+     */
+    private void clearArtModeIfStandby() {
+        findServiceInstance(RemoteControllerService.SERVICE_NAME).map(s -> (RemoteControllerService) s)
+                .filter(RemoteControllerService::getArtMode).ifPresent(service -> scheduler.execute(() -> {
+                    if (disposed || !isStandbyConfirmed()) {
+                        return;
+                    }
+                    synchronized (this) {
+                        if (!disposed && !servicesOnline) {
+                            logger.debug("{}: TV is in standby, clearing art mode", host);
+                            service.clearArtMode();
+                        }
+                    }
+                }));
+    }
+
+    /**
+     * @return true only if the TV itself reports standby. REST also reports standby in art mode on 2025 and later
+     *         Frame TV's, and a TV that does not answer says nothing about its mode, so neither confirms standby
+     */
+    private boolean isStandbyConfirmed() {
+        Optional<String> ipControlState = fetchIpControlPowerState();
+        if (ipControlState.isPresent()) {
+            return "standby".equals(ipControlState.get());
+        }
+        TVProperties properties = fetchTVProperties(0, 2);
+        int year = properties.getModelYear();
+        return "standby".equals(properties.getPowerState()) && year > 0 && year < 25;
     }
 
     private void clearStandbyState() {
