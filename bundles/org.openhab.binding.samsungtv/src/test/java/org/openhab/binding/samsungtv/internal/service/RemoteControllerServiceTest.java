@@ -21,6 +21,8 @@ import static org.openhab.binding.samsungtv.internal.SamsungTvBindingConstants.P
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
@@ -41,6 +43,8 @@ public class RemoteControllerServiceTest {
 
     private final SamsungTvHandler handler = mock(SamsungTvHandler.class);
     private final List<Runnable> queued = new ArrayList<>();
+    private final List<Runnable> scheduled = new ArrayList<>();
+    private final ScheduledFuture<?> scheduledFuture = mock(ScheduledFuture.class);
 
     @BeforeEach
     public void setUp() {
@@ -50,6 +54,10 @@ public class RemoteControllerServiceTest {
         when(handler.getWebSocketFactory()).thenReturn(webSocketFactory);
         ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
         doAnswer(invocation -> queued.add(invocation.getArgument(0))).when(scheduler).execute(any());
+        doAnswer(invocation -> {
+            scheduled.add(invocation.getArgument(0));
+            return scheduledFuture;
+        }).when(scheduler).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
         when(handler.getScheduler()).thenReturn(scheduler);
         when(handler.fetchPowerState()).thenReturn("on");
     }
@@ -92,5 +100,65 @@ public class RemoteControllerServiceTest {
 
         verify(handler).fetchPowerState();
         verify(handler, atLeastOnce()).valueReceived(anyString(), any());
+    }
+
+    @Test
+    public void artModeStatusIsRequestedAtMostThreeTimes() throws Exception {
+        when(handler.getArtModeSupported()).thenReturn(true);
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.refreshArtModeStatus();
+        runScheduled();
+
+        verify(handler.getScheduler(), times(2)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    public void artModeStatusIsNotRepeatedOnceModeIsKnown() throws Exception {
+        when(handler.getArtModeSupported()).thenReturn(true);
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.refreshArtModeStatus();
+        service.artMode = true;
+        runScheduled();
+
+        verify(handler.getScheduler(), times(1)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    public void stopCancelsArtModeStatusRetry() throws Exception {
+        when(handler.getArtModeSupported()).thenReturn(true);
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.refreshArtModeStatus();
+        service.stop();
+
+        verify(scheduledFuture).cancel(false);
+        runScheduled();
+        verify(handler.getScheduler(), times(1)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    public void newerRefreshReplacesArtModeStatusRetry() throws Exception {
+        when(handler.getArtModeSupported()).thenReturn(true);
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.refreshArtModeStatus();
+        service.refreshArtModeStatus();
+
+        verify(scheduledFuture).cancel(false);
+        // the retry of the first refresh is dropped, only the second refresh goes on to its third request
+        runScheduled();
+        verify(handler.getScheduler(), times(3)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    public void artModeStatusIsNotRequestedWithoutArtMode() throws Exception {
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.refreshArtModeStatus();
+
+        verify(handler.getScheduler(), never()).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    private void runScheduled() {
+        while (!scheduled.isEmpty()) {
+            scheduled.remove(0).run();
+        }
     }
 }

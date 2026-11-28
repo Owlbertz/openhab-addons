@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -70,6 +71,8 @@ public class RemoteControllerService implements SamsungTvService {
     private static final List<String> refreshArt = Arrays.asList(ART_BRIGHTNESS, ART_ORIENTATION);
     private static final List<String> refreshApps = Arrays.asList(SOURCE_APP);
     private static final List<String> art2022 = Arrays.asList(ART_MODE, SET_ART_MODE);
+    private static final int ART_STATUS_ATTEMPTS = 3;
+    private static final long ART_STATUS_RETRY_MS = 2000;
 
     private String host;
     private boolean upnp;
@@ -80,6 +83,10 @@ public class RemoteControllerService implements SamsungTvService {
     private CompletableFuture<@Nullable Void> powerUpdate = CompletableFuture.completedFuture(null);
     // incremented by stop(), so queued power updates from before it are dropped
     private final AtomicInteger powerGeneration = new AtomicInteger();
+    private final Object artStatusLock = new Object();
+    // incremented by each art mode status refresh and by stop(), so a retry from an earlier refresh is dropped
+    private int artStatusGeneration;
+    private @Nullable ScheduledFuture<?> artStatusRetry;
 
     public boolean artMode = false;
     public boolean justStarted = true;
@@ -160,13 +167,63 @@ public class RemoteControllerService implements SamsungTvService {
         }
     }
 
+    /**
+     * Requests the art mode status, which also updates the power state. Frame TV's with newer firmware (art API 6000)
+     * do not send wakeup when they come out of standby, so the binding would otherwise not know the TV's mode. The
+     * request is repeated a few times while power and art mode are still off, as the send can fail, or the power
+     * state check can still report standby while the TV wakes. A newer refresh replaces one that is still retrying.
+     */
+    public void refreshArtModeStatus() {
+        requestArtModeStatus(ART_STATUS_ATTEMPTS, cancelArtStatusRetry());
+    }
+
+    // not synchronized on the service: it is called from putOnline() with the handler locked, and this service calls
+    // the handler
+    private void requestArtModeStatus(int attempts, int generation) {
+        synchronized (artStatusLock) {
+            if (generation != artStatusGeneration) {
+                return;
+            }
+        }
+        if (getPowerState() || artMode || !getArtModeSupported()
+                || !(remoteController instanceof RemoteControllerWebSocket)) {
+            return;
+        }
+        remoteController.getArtmodeStatus();
+        ScheduledExecutorService scheduler = getScheduler();
+        if (attempts > 1 && scheduler != null) {
+            synchronized (artStatusLock) {
+                // a newer refresh or stop() may have replaced this one while the request was sent
+                if (generation == artStatusGeneration) {
+                    artStatusRetry = scheduler.schedule(() -> requestArtModeStatus(attempts - 1, generation),
+                            ART_STATUS_RETRY_MS, TimeUnit.MILLISECONDS);
+                }
+            }
+        }
+    }
+
     @Override
     public void stop() {
         powerGeneration.incrementAndGet();
+        cancelArtStatusRetry();
         try {
             remoteController.close();
         } catch (RemoteControllerException ignore) {
             // ignore error
+        }
+    }
+
+    /**
+     * @return the generation for a new art mode status refresh, any retry of an earlier one is dropped
+     */
+    private int cancelArtStatusRetry() {
+        synchronized (artStatusLock) {
+            ScheduledFuture<?> retry = artStatusRetry;
+            if (retry != null) {
+                retry.cancel(false);
+                artStatusRetry = null;
+            }
+            return ++artStatusGeneration;
         }
     }
 
