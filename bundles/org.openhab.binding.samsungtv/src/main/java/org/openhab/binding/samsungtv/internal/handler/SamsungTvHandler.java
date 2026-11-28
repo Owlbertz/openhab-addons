@@ -663,7 +663,23 @@ public class SamsungTvHandler extends BaseThingHandler implements RegistryListen
     }
 
     /**
-     * Called with each art mode report, see {@link ModeOnWake#take(boolean)}
+     * @param artMode true for an artMode ON command, false for a power ON command
+     * @return true if an ON command is waking the TV, the mode to request is then changed, see
+     *         {@link ModeOnWake#retarget}
+     */
+    public boolean retargetModeOnWake(boolean artMode) {
+        return modeOnWake.retarget(artMode);
+    }
+
+    /**
+     * A power state that did not come from an art mode report has been applied, see {@link ModeOnWake#woke()}
+     */
+    public void woke() {
+        modeOnWake.woke();
+    }
+
+    /**
+     * Called once an art mode report has been applied, see {@link ModeOnWake#take(boolean)}
      */
     public boolean takeModeOnWake(boolean artMode) {
         return modeOnWake.take(artMode);

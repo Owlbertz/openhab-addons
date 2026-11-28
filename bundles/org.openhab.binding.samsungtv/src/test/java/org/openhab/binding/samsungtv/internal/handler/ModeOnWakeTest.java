@@ -58,6 +58,69 @@ public class ModeOnWakeTest {
     }
 
     @Test
+    public void wakingUntilReportedModeIsApplied() {
+        modeOnWake.set(true);
+        assertTrue(modeOnWake.retarget(true));
+        modeOnWake.take(true);
+        assertFalse(modeOnWake.retarget(true));
+    }
+
+    @Test
+    public void commandAfterAppliedReportDoesNotRetarget() {
+        modeOnWake.set(false);
+        assertFalse(modeOnWake.take(false));
+        assertFalse(modeOnWake.retarget(true));
+        assertFalse(modeOnWake.take(false));
+    }
+
+    @Test
+    public void wokeEndsWakingAndKeepsRequestedMode() {
+        modeOnWake.set(true);
+        modeOnWake.woke();
+        assertFalse(modeOnWake.retarget(false));
+        assertTrue(modeOnWake.take(false));
+    }
+
+    @Test
+    public void retargetKeepsDeadlines() {
+        modeOnWake.set(false);
+        now.addAndGet(10000);
+        assertTrue(modeOnWake.retarget(true));
+        now.addAndGet(5000);
+        assertFalse(modeOnWake.retarget(false));
+        now.addAndGet(45000);
+        assertFalse(modeOnWake.take(false));
+    }
+
+    @Test
+    public void retargetRequestsOtherMode() {
+        modeOnWake.set(false);
+        assertTrue(modeOnWake.retarget(true));
+        assertTrue(modeOnWake.take(false));
+    }
+
+    @Test
+    public void wakingExpires() {
+        modeOnWake.set(true);
+        now.addAndGet(15000);
+        assertFalse(modeOnWake.retarget(true));
+    }
+
+    @Test
+    public void offStopsWaking() {
+        modeOnWake.set(true);
+        modeOnWake.clear();
+        assertFalse(modeOnWake.retarget(true));
+    }
+
+    @Test
+    public void notWakingWithoutCommand() {
+        assertFalse(modeOnWake.retarget(true));
+        modeOnWake.woke();
+        assertFalse(modeOnWake.retarget(true));
+    }
+
+    @Test
     public void nothingPendingWithoutCommand() {
         assertFalse(modeOnWake.take(true));
         assertFalse(modeOnWake.take(false));

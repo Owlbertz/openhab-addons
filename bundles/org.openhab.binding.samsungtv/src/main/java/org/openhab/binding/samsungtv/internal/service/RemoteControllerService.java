@@ -314,6 +314,12 @@ public class RemoteControllerService implements SamsungTvService {
 
             case POWER:
                 if (command instanceof OnOffType) {
+                    if (OnOffType.ON.equals(command) && handler.retargetModeOnWake(false)) {
+                        // another KEY_POWER would switch the waking TV to the other mode, request TV mode instead
+                        logger.debug("{}: TV is waking, requesting TV mode instead of sending KEY_POWER", host);
+                        result = true;
+                        break;
+                    }
                     handler.clearModeOnWake();
                     if (!isUpnp()) {
                         // websocket uses KEY_POWER
@@ -368,7 +374,11 @@ public class RemoteControllerService implements SamsungTvService {
                     // send key only to toggle state when power = off
                     if (!getPowerState()) {
                         if (OnOffType.ON.equals(command)) {
-                            if (!artMode) {
+                            if (handler.retargetModeOnWake(true)) {
+                                // another KEY_POWER would switch the waking TV to the other mode, request art mode
+                                logger.debug("{}: TV is waking, requesting art mode instead of sending KEY_POWER",
+                                        host);
+                            } else if (!artMode) {
                                 sendKeys(KeyCode.KEY_POWER);
                                 handler.setModeOnWake(true);
                             }
@@ -649,17 +659,18 @@ public class RemoteControllerService implements SamsungTvService {
     }
 
     /**
-     * {@link #powerUpdated(boolean, boolean)} for callers on the websocket receive thread. Fetching the power state
-     * blocks on HTTP, so it runs on the scheduler instead, one update at a time in the order they were reported.
+     * {@link #powerUpdated(boolean, boolean)} for the art channel's reports on the websocket receive thread. Fetching
+     * the power state blocks on HTTP, so it runs on the scheduler instead, one update at a time in the order they were
+     * reported. Once a report is applied, the commanded mode is requested if the TV woke in the other one.
      */
     public synchronized void powerUpdatedAsync(boolean on, boolean artMode) {
         ScheduledExecutorService scheduler = getScheduler();
+        int generation = powerGeneration.get();
         if (scheduler == null) {
-            powerUpdated(on, artMode);
+            powerUpdated(on, artMode, generation, true);
             return;
         }
-        int generation = powerGeneration.get();
-        powerUpdate = powerUpdate.thenRunAsync(() -> powerUpdated(on, artMode, generation), scheduler)
+        powerUpdate = powerUpdate.thenRunAsync(() -> powerUpdated(on, artMode, generation, true), scheduler)
                 .exceptionally(e -> {
                     logger.debug("{}: Power update failed: {}", host, e.getMessage());
                     return null;
@@ -668,11 +679,13 @@ public class RemoteControllerService implements SamsungTvService {
 
     /**
      * Requests the commanded mode if the TV woke from standby in the other one, as a Frame TV wakes in the mode it was
-     * switched off from. The TV reports art mode status on wakeup and when the art channel reconnects.
+     * switched off from. The TV reports art mode status on wakeup and when the art channel reconnects. This runs in
+     * the power update that applies the report, which also ends the wake, so an ON command either changes the mode
+     * requested here, or is handled with the applied state.
      *
      * @param artMode the art mode the TV reports
      */
-    public void requestModeIfWaking(boolean artMode) {
+    private void requestModeIfWaking(boolean artMode) {
         if (handler.takeModeOnWake(artMode)) {
             logger.debug("{}: TV woke up in {} mode, requesting {} mode", host, artMode ? "art" : "TV",
                     artMode ? "TV" : "art");
@@ -682,10 +695,10 @@ public class RemoteControllerService implements SamsungTvService {
     }
 
     public void powerUpdated(boolean on, boolean artMode) {
-        powerUpdated(on, artMode, powerGeneration.get());
+        powerUpdated(on, artMode, powerGeneration.get(), false);
     }
 
-    private void powerUpdated(boolean on, boolean artMode, int generation) {
+    private void powerUpdated(boolean on, boolean artMode, int generation, boolean artReport) {
         if (generation != powerGeneration.get()) {
             logger.debug("{}: Service stopped, dropping power update", host);
             return;
@@ -722,6 +735,13 @@ public class RemoteControllerService implements SamsungTvService {
         } else {
             handler.valueReceived(ART_MODE, OnOffType.from(artMode));
             handler.valueReceived(POWER, OnOffType.from(on));
+        }
+        if (on || artMode) {
+            if (artReport) {
+                requestModeIfWaking(artMode);
+            } else {
+                handler.woke();
+            }
         }
     }
 

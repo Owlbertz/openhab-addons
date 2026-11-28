@@ -28,6 +28,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.openhab.binding.samsungtv.internal.config.SamsungTvConfiguration;
 import org.openhab.binding.samsungtv.internal.handler.SamsungTvHandler;
 import org.openhab.core.io.net.http.WebSocketFactory;
@@ -100,6 +101,40 @@ public class RemoteControllerServiceTest {
 
         verify(handler).fetchPowerState();
         verify(handler, atLeastOnce()).valueReceived(anyString(), any());
+    }
+
+    @Test
+    public void modeOnWakeIsTakenOnceArtReportIsApplied() throws Exception {
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.powerUpdatedAsync(false, true);
+        // the wake stays pending while the power state check is queued, so an ON command can still change its mode
+        verify(handler, never()).takeModeOnWake(anyBoolean());
+        queued.forEach(Runnable::run);
+
+        InOrder inOrder = inOrder(handler);
+        inOrder.verify(handler).valueReceived(POWER, OnOffType.OFF);
+        inOrder.verify(handler).takeModeOnWake(true);
+        verify(handler, never()).woke();
+    }
+
+    @Test
+    public void modeOnWakeIsKeptWhileTvIsInStandby() throws Exception {
+        when(handler.fetchPowerState()).thenReturn("standby");
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.powerUpdatedAsync(false, true);
+        queued.forEach(Runnable::run);
+
+        verify(handler, never()).takeModeOnWake(anyBoolean());
+        verify(handler, never()).woke();
+    }
+
+    @Test
+    public void powerUpdateWithoutArtReportOnlyEndsWaking() throws Exception {
+        RemoteControllerService service = new RemoteControllerService("192.168.1.10", 8002, false, handler);
+        service.powerUpdated(true, false);
+
+        verify(handler).woke();
+        verify(handler, never()).takeModeOnWake(anyBoolean());
     }
 
     @Test
